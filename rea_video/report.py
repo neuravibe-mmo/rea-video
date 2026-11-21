@@ -13,7 +13,7 @@ from pathlib import Path
 
 from . import aspects, entities, narrative, performance
 from .classify import LABEL_ZH
-from .i18n import LangDict, T, join, lang, semi, shot_ids
+from .i18n import LangDict, T, join, lang, semi, shot_ids, translate_text
 from .packaging import layer_name, anchor_text
 from .production import report_md as production_md
 from .sound_source import MUSIC_ZH, SFX_ZH, VOICE_ZH
@@ -225,7 +225,7 @@ def _head_md(b: dict) -> list[str]:
     said = _story(b)["summary"] or _said_from_story(b)
     if said:
         L.append(T("**一句话**：{x}", "**In one line**: {x}", x=said))
-    L.append(T("**怎么做的**：{v}", "**How it was made**: {v}", v=s["verdict"].split(T("；", "; "))[0]))
+    L.append(T("**怎么做的**：{v}", "**How it was made**: {v}", v=translate_text(s["verdict"].split(T("；", "; "))[0])))
     L += ["", T("- {d} · {o} {ar} · {n} 个镜头，平均 {avg} 秒一个", "- {d} · {o} {ar} · {n} shots, {avg}s each on average",
                 d=_mmss(src["duration"]), o=orient, ar=src["aspect_ratio"], n=s["shots"], avg=f"{float(s['avg_shot_s']):.1f}"),
           T("- 判断可靠度 {c:.0%}，依据：{by}", "- Confidence {c:.0%}, based on: {by}", c=s["confidence"], by=_readers(b))]
@@ -915,7 +915,7 @@ def _shotlist_md(b: dict) -> list[str]:
         pic = a.get("first_frame") or a.get("sheet")  # one frame reads at thumbnail size; the contact sheet is in the appendix
         rows.append([r["index"], f"![#{r['index']}]({pic})" if pic else "—", _clock(r["start"]), f"{r['duration']:.1f}s", *([says[:48] + ("…" if len(says) > 48 else "") or "—"] if told else []),
                      desc[:40] + ("…" if len(desc) > 40 else "") or "—", CAMERA_ZH.get(r["features"].get("camera", "unknown"), "—"), _layers(r),
-                     f"{base['label_zh']} {base['confidence']:.0%}", _origin(r, brief=True), _route(r, units)])
+                     f"{translate_text(LABEL_ZH.get(base.get('label'), base['label_zh']))} {base['confidence']:.0%}", translate_text(_origin(r, brief=True)), translate_text(_route(r, units))])
     return ["", T("## 分镜表", "## Shot list"), "",
             T("「画面」「运镜」「叠加层」是画面里看得到的；「制作方式」「素材来源」是工具推断的，依据见附录逐镜取证。",
               "Picture, Camera and Overlays are what is visible on screen; Made with and Material are the tools' inference, with the basis in the shot-by-shot appendix.")] + _table(
@@ -984,7 +984,7 @@ def _shot_detail_md(r: dict) -> list[str]:
             L.append(f"- ⚠️ {name}{_colon()}{base[key]}")
     if base.get("image_source"):
         L.append(T("- 静帧来源：{s}", "- Still source: {s}", s=base["image_source"]))
-    L.append(T("- 素材来源：{o}", "- Material: {o}", o=_origin(r)))
+    L.append(T("- 素材来源：{o}", "- Material: {o}", o=translate_text(_origin(r))))
     for it in (r.get("material") or {}).get("items", []):
         if it.get("real_material") and it.get("evidence"):
             L.append(f"  - {it['kind_zh']}{_colon()}{it['evidence']}")
@@ -992,9 +992,9 @@ def _shot_detail_md(r: dict) -> list[str]:
         L.append(T("- 可能的工具：{g}", "- Likely tool: {g}", g=base["generator_guess"]))
     if measured:
         L.append(T("- 判断依据（工具测量，肉眼不一定看得出）：", "- Basis (tool measurements, not necessarily visible to the eye):"))
-        L += [f"  - {e}" for e in measured[:8]]
+        L += [f"  - {translate_text(e)}" for e in measured[:8]]
     rep = r["replication"]
-    L += ["", T("- 复刻：{n}", "- Remake: {n}", n=rep["note"])]
+    L += ["", T("- 复刻：{n}", "- Remake: {n}", n=translate_text(rep["note"]))]
     if rep.get("capsule", {}).get("image_prompt"):
         L.append(T("  - 首帧图像提示词：{p}", "  - First-frame image prompt: {p}", p=rep["capsule"]["image_prompt"]))
     if rep.get("capsule", {}).get("prompt"):
@@ -1006,7 +1006,7 @@ def _appendix_md(b: dict) -> list[str]:
     L = ["", T("## 附录", "## Appendix"), "", T("### 逐镜取证", "### Shot by shot"), "",
          T("每个镜头分两块：画面里看得到的，和工具推断的制作方式（附判断依据）；最后是复刻提示词。默认折叠，点开看。", "Each shot has two parts: what is visible on screen, and how the tools infer it was made (with the basis); remake prompts last. Folded by default."), ""]
     for r in b["shots"]:
-        title = f"#{r['index']} {fmt_time(r['start'])}–{fmt_time(r['end'])} · {r['verdict']}"
+        title = f"#{r['index']} {fmt_time(r['start'])}–{fmt_time(r['end'])} · {translate_text(r['verdict'])}"
         L += [f'<details class="ref"><summary>{html.escape(title)}</summary>', ""] + _shot_detail_md(r) + ["", "</details>", ""]
     prov = b.get("provenance", {})
     if prov.get("hints") or prov.get("encoder"):
@@ -1173,7 +1173,7 @@ def _md_to_html(lines: list[str], b: dict) -> str:
 def _mix_bar(b: dict) -> str:
     esc = html.escape
     return "<div class='mix'>" + "".join(
-        f"<div class='bar' style='flex:{m['ratio']};background:rgb({','.join(str(c) for c in LABEL_COLOR.get(m['label'], (80, 80, 80)))})' title='{esc(m['label_zh'])}'>{esc(m['label_zh'])} {m['ratio']:.0%}</div>"
+        f"<div class='bar' style='flex:{m['ratio']};background:rgb({','.join(str(c) for c in LABEL_COLOR.get(m['label'], (80, 80, 80)))})' title='{esc(translate_text(LABEL_ZH.get(m.get('label'), m['label_zh'])))}'>{esc(translate_text(LABEL_ZH.get(m.get('label'), m['label_zh'])))} {m['ratio']:.0%}</div>"
         for m in b["summary"]["production_mix"]) + "</div>"
 
 

@@ -338,9 +338,12 @@ class ReaVideoHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(file_size))
         self.end_headers()
 
-        with open(file_path, "rb") as f:
-            while chunk := f.read(65536):
-                self.wfile.write(chunk)
+        try:
+            with open(file_path, "rb") as f:
+                while chunk := f.read(65536):
+                    self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass
 
 
 HTML_PAGE = """<!DOCTYPE html>
@@ -383,7 +386,7 @@ HTML_PAGE = """<!DOCTYPE html>
     <div class="flex items-center space-x-4">
       <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
         <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse mr-1.5"></span>
-        Localhost 8765
+        Localhost <span id="port-display">8888</span>
       </span>
       <a href="https://github.com/JuneYaooo/rea-video" target="_blank" class="text-xs text-gray-400 hover:text-white transition">GitHub Repo ↗</a>
     </div>
@@ -433,10 +436,49 @@ HTML_PAGE = """<!DOCTYPE html>
 
         <!-- Tab Content: Sample -->
         <div id="tab-sample-content" class="hidden space-y-2">
-          <label class="text-xs text-gray-400">Chọn 1 video mẫu trong kho:</label>
-          <select id="sample-select" onchange="onSampleSelect()" class="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-purple-500">
-            <option value="">-- Đang tải danh sách mẫu... --</option>
-          </select>
+          <div class="flex items-center justify-between">
+            <label class="text-xs text-gray-400 font-medium">Chọn video mẫu trong kho:</label>
+            <span id="sample-count-badge" class="text-[10px] text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded-full border border-purple-500/20 font-mono">0 mẫu</span>
+          </div>
+
+          <!-- Custom Dark Dropdown -->
+          <div class="relative" id="custom-sample-dropdown">
+            <!-- Trigger Button -->
+            <button type="button" id="sample-dropdown-trigger" onclick="toggleSampleDropdown(event)"
+                    class="w-full bg-gray-950/80 hover:bg-gray-900 border border-gray-700/80 hover:border-purple-500/60 focus:border-purple-500 rounded-xl px-3.5 py-2.5 text-left text-sm text-gray-200 focus:outline-none transition-all flex items-center justify-between shadow-inner group">
+              <div class="flex items-center space-x-2.5 truncate mr-2">
+                <span class="w-7 h-7 rounded-lg bg-purple-500/10 text-purple-400 flex items-center justify-center shrink-0 border border-purple-500/20 group-hover:bg-purple-500/20 transition">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+                  </svg>
+                </span>
+                <span id="sample-dropdown-label" class="text-gray-400 text-xs sm:text-sm truncate">-- Chọn 1 video trong kho mẫu --</span>
+              </div>
+              <svg id="sample-dropdown-arrow" class="w-4 h-4 text-gray-500 group-hover:text-purple-400 transition-transform duration-200 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+              </svg>
+            </button>
+
+            <!-- Dropdown Menu -->
+            <div id="sample-dropdown-menu"
+                 class="hidden absolute left-0 right-0 top-full mt-2 z-50 bg-gray-900/95 backdrop-blur-xl border border-gray-700/80 rounded-xl shadow-2xl shadow-purple-950/60 overflow-hidden">
+              <!-- Search filter box inside dropdown -->
+              <div class="p-2 border-b border-gray-800 bg-gray-950/80">
+                <div class="relative">
+                  <svg class="w-3.5 h-3.5 text-gray-500 absolute left-2.5 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                  </svg>
+                  <input type="text" id="sample-search-input" oninput="filterSampleOptions(this.value)" placeholder="Tìm video mẫu..." 
+                         class="w-full bg-gray-900 border border-gray-700/80 rounded-lg pl-8 pr-3 py-1.5 text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-purple-500 transition">
+                </div>
+              </div>
+
+              <!-- Options List -->
+              <div id="sample-dropdown-options" class="max-h-60 overflow-y-auto p-1.5 space-y-1">
+                <!-- Dynamically populated -->
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- Selected Video Info Preview -->
@@ -472,11 +514,64 @@ HTML_PAGE = """<!DOCTYPE html>
         <!-- Options for Decompose -->
         <div id="decompose-options" class="space-y-3 pt-2 border-t border-gray-800/80">
           <div class="flex items-center justify-between">
-            <label class="text-xs text-gray-300">Ngôn ngữ báo cáo</label>
-            <select id="report-lang" class="bg-gray-950 border border-gray-700 rounded-lg px-2.5 py-1 text-xs text-gray-200">
-              <option value="zh">Tiếng Trung (Gốc)</option>
-              <option value="en" selected>Tiếng Anh (English)</option>
-            </select>
+            <label class="text-xs text-gray-300 font-medium">Ngôn ngữ báo cáo</label>
+            
+            <!-- Custom Language Dropdown -->
+            <div class="relative" id="custom-lang-dropdown">
+              <input type="hidden" id="report-lang" value="vi">
+
+              <!-- Trigger Button -->
+              <button type="button" id="lang-dropdown-trigger" onclick="toggleLangDropdown(event)"
+                      class="bg-gray-950/80 hover:bg-gray-900 border border-gray-700/80 hover:border-purple-500/60 focus:border-purple-500 rounded-xl px-3 py-1.5 text-xs text-gray-200 focus:outline-none transition-all flex items-center space-x-2 shadow-inner group">
+                <span id="lang-dropdown-flag" class="text-sm">🇻🇳</span>
+                <span id="lang-dropdown-label" class="font-medium">Tiếng Việt</span>
+                <svg id="lang-dropdown-arrow" class="w-3.5 h-3.5 text-gray-500 group-hover:text-purple-400 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                </svg>
+              </button>
+
+              <!-- Dropdown Menu -->
+              <div id="lang-dropdown-menu"
+                   class="hidden absolute right-0 top-full mt-1.5 z-50 w-52 bg-gray-900/95 backdrop-blur-xl border border-gray-700/80 rounded-xl shadow-2xl shadow-purple-950/60 overflow-hidden p-1 space-y-1">
+                
+                <!-- Option Vietnamese -->
+                <div onclick="selectLang('vi', 'Tiếng Việt', '🇻🇳')" id="lang-opt-vi"
+                     class="flex items-center justify-between px-2.5 py-2 rounded-lg cursor-pointer transition text-xs bg-purple-600/20 text-purple-200 border border-purple-500/40">
+                  <div class="flex items-center space-x-2">
+                    <span class="text-sm">🇻🇳</span>
+                    <span class="font-medium">Tiếng Việt</span>
+                  </div>
+                  <svg id="lang-check-vi" class="w-3.5 h-3.5 text-purple-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"></path>
+                  </svg>
+                </div>
+
+                <!-- Option English -->
+                <div onclick="selectLang('en', 'Tiếng Anh (English)', '🇬🇧')" id="lang-opt-en"
+                     class="flex items-center justify-between px-2.5 py-2 rounded-lg cursor-pointer transition text-xs hover:bg-gray-800/80 text-gray-300 hover:text-white border border-transparent">
+                  <div class="flex items-center space-x-2">
+                    <span class="text-sm">🇬🇧</span>
+                    <span class="font-medium">Tiếng Anh (English)</span>
+                  </div>
+                  <svg id="lang-check-en" class="w-3.5 h-3.5 text-purple-400 shrink-0 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"></path>
+                  </svg>
+                </div>
+
+                <!-- Option Chinese -->
+                <div onclick="selectLang('zh', 'Tiếng Trung (Gốc)', '🇨🇳')" id="lang-opt-zh"
+                     class="flex items-center justify-between px-2.5 py-2 rounded-lg cursor-pointer transition text-xs hover:bg-gray-800/80 text-gray-300 hover:text-white border border-transparent">
+                  <div class="flex items-center space-x-2">
+                    <span class="text-sm">🇨🇳</span>
+                    <span class="font-medium">Tiếng Trung (Gốc)</span>
+                  </div>
+                  <svg id="lang-check-zh" class="w-3.5 h-3.5 text-purple-400 shrink-0 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"></path>
+                  </svg>
+                </div>
+
+              </div>
+            </div>
           </div>
           <div class="flex items-center justify-between">
             <label class="text-xs text-gray-300" title="Bóc tách giọng nói và nhạc nền">Tách âm thanh (Stems)</label>
@@ -547,14 +642,14 @@ HTML_PAGE = """<!DOCTYPE html>
         </div>
 
         <!-- View: Report iframe -->
-        <div id="tab-view-report" class="bg-gray-950 rounded-xl border border-gray-800 overflow-hidden h-[620px] flex items-center justify-center">
-          <div id="empty-report" class="text-center p-8 text-gray-500">
+        <div id="tab-view-report" class="bg-gray-950 rounded-xl border border-gray-800 overflow-hidden transition-all duration-200">
+          <div id="empty-report" class="text-center p-12 text-gray-500 min-h-[360px] flex flex-col items-center justify-center">
             <svg class="w-12 h-12 mx-auto mb-2 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
             </svg>
             <p class="text-xs">Chưa có báo cáo nào được chọn. Hãy chạy phân tích một video.</p>
           </div>
-          <iframe id="report-frame" class="w-full h-full hidden" src="about:blank"></iframe>
+          <iframe id="report-frame" class="w-full hidden border-0 block" scrolling="no" src="about:blank" style="min-height: 400px; height: 500px; overflow: hidden;"></iframe>
         </div>
 
         <!-- View: Logs -->
@@ -585,6 +680,25 @@ HTML_PAGE = """<!DOCTYPE html>
       loadSamples();
       loadHistory();
       setupDragDrop();
+      setupReportIframeAutoResize();
+
+      // Đóng dropdown khi click bên ngoài hoặc bấm Escape
+      document.addEventListener('click', (e) => {
+        const sampleDropdown = document.getElementById('custom-sample-dropdown');
+        if (sampleDropdown && !sampleDropdown.contains(e.target)) {
+          closeSampleDropdown();
+        }
+        const langDropdown = document.getElementById('custom-lang-dropdown');
+        if (langDropdown && !langDropdown.contains(e.target)) {
+          closeLangDropdown();
+        }
+      });
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          closeSampleDropdown();
+          closeLangDropdown();
+        }
+      });
     });
 
     function switchInputTab(tab) {
@@ -602,6 +716,9 @@ HTML_PAGE = """<!DOCTYPE html>
         if (t === tab) {
           btn.className = 'px-4 py-2 text-xs font-semibold border-b-2 border-purple-500 text-purple-400';
           content.classList.remove('hidden');
+          if (t === 'report') {
+            setTimeout(adjustReportHeight, 30);
+          }
         } else {
           btn.className = 'px-4 py-2 text-xs font-semibold border-b-2 border-transparent text-gray-400 hover:text-gray-200';
           content.classList.add('hidden');
@@ -622,28 +739,156 @@ HTML_PAGE = """<!DOCTYPE html>
       document.getElementById('decompose-options').classList.toggle('hidden', mode !== 'decompose');
     }
 
+    let allSamples = [];
+    let selectedSampleIndex = -1;
+
     async function loadSamples() {
       try {
         const res = await fetch('/api/samples');
-        const data = await res.json();
-        const sel = document.getElementById('sample-select');
-        sel.innerHTML = '<option value="">-- Chọn 1 video trong kho mẫu --</option>';
-        data.forEach((s, idx) => {
-          const opt = document.createElement('option');
-          opt.value = JSON.stringify(s);
-          opt.textContent = `${s.name} (${s.size})`;
-          sel.appendChild(opt);
-        });
+        allSamples = await res.json();
+        const badge = document.getElementById('sample-count-badge');
+        if (badge) badge.textContent = `${allSamples.length} mẫu`;
+        renderSampleOptions(allSamples);
       } catch (err) {
         console.error("Lỗi tải samples:", err);
       }
     }
 
-    function onSampleSelect() {
-      const sel = document.getElementById('sample-select');
-      if (!sel.value) return;
-      const sample = JSON.parse(sel.value);
+    function renderSampleOptions(list) {
+      const container = document.getElementById('sample-dropdown-options');
+      if (!container) return;
+      if (!list || list.length === 0) {
+        container.innerHTML = '<p class="text-xs text-gray-500 py-4 text-center">Không tìm thấy video mẫu nào.</p>';
+        return;
+      }
+      container.innerHTML = '';
+      list.forEach((s) => {
+        const originalIndex = allSamples.findIndex(item => item.path === s.path);
+        const isSelected = (originalIndex === selectedSampleIndex);
+        const item = document.createElement('div');
+        item.className = `flex items-center justify-between px-3 py-2.5 rounded-xl cursor-pointer transition-all text-xs group ${
+          isSelected 
+            ? 'bg-purple-600/20 text-purple-200 border border-purple-500/50 shadow-sm' 
+            : 'hover:bg-gray-800/80 text-gray-300 hover:text-white border border-transparent'
+        }`;
+        item.onclick = (e) => {
+          e.stopPropagation();
+          selectSample(originalIndex);
+        };
+        item.innerHTML = `
+          <div class="flex items-center space-x-3 truncate mr-2">
+            <div class="w-7 h-7 rounded-lg ${isSelected ? 'bg-purple-500/30 text-purple-300 border-purple-500/40' : 'bg-gray-800/80 text-gray-400 group-hover:text-purple-300 group-hover:bg-purple-500/15 border-gray-700/60'} flex items-center justify-center shrink-0 border transition">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+              </svg>
+            </div>
+            <div class="truncate text-left">
+              <p class="font-medium truncate ${isSelected ? 'text-purple-200' : 'text-gray-200 group-hover:text-white'}">${s.name}</p>
+            </div>
+          </div>
+          <div class="flex items-center space-x-2 shrink-0">
+            <span class="text-[11px] font-mono px-2 py-0.5 rounded-md bg-gray-950/80 text-gray-400 border border-gray-800 group-hover:border-gray-700">${s.size}</span>
+            ${isSelected ? '<svg class="w-4 h-4 text-purple-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"></path></svg>' : ''}
+          </div>
+        `;
+        container.appendChild(item);
+      });
+    }
+
+    function toggleSampleDropdown(e) {
+      if (e) e.stopPropagation();
+      closeLangDropdown();
+      const menu = document.getElementById('sample-dropdown-menu');
+      const arrow = document.getElementById('sample-dropdown-arrow');
+      const isClosed = menu.classList.contains('hidden');
+      if (isClosed) {
+        menu.classList.remove('hidden');
+        arrow.classList.add('rotate-180');
+        const searchInput = document.getElementById('sample-search-input');
+        if (searchInput) {
+          searchInput.value = '';
+          renderSampleOptions(allSamples);
+          setTimeout(() => searchInput.focus(), 50);
+        }
+      } else {
+        closeSampleDropdown();
+      }
+    }
+
+    function toggleLangDropdown(e) {
+      if (e) e.stopPropagation();
+      closeSampleDropdown();
+      const menu = document.getElementById('lang-dropdown-menu');
+      const arrow = document.getElementById('lang-dropdown-arrow');
+      const isClosed = menu.classList.contains('hidden');
+      if (isClosed) {
+        menu.classList.remove('hidden');
+        arrow.classList.add('rotate-180');
+      } else {
+        closeLangDropdown();
+      }
+    }
+
+    function closeLangDropdown() {
+      const menu = document.getElementById('lang-dropdown-menu');
+      const arrow = document.getElementById('lang-dropdown-arrow');
+      if (menu) menu.classList.add('hidden');
+      if (arrow) arrow.classList.remove('rotate-180');
+    }
+
+    function selectLang(val, label, flag) {
+      document.getElementById('report-lang').value = val;
+      document.getElementById('lang-dropdown-label').textContent = label;
+      document.getElementById('lang-dropdown-flag').textContent = flag;
+
+      ['vi', 'en', 'zh'].forEach(l => {
+        const opt = document.getElementById(`lang-opt-${l}`);
+        const check = document.getElementById(`lang-check-${l}`);
+        if (opt) {
+          if (l === val) {
+            opt.className = 'flex items-center justify-between px-2.5 py-2 rounded-lg cursor-pointer transition text-xs bg-purple-600/20 text-purple-200 border border-purple-500/40';
+            if (check) check.classList.remove('hidden');
+          } else {
+            opt.className = 'flex items-center justify-between px-2.5 py-2 rounded-lg cursor-pointer transition text-xs hover:bg-gray-800/80 text-gray-300 hover:text-white border border-transparent';
+            if (check) check.classList.add('hidden');
+          }
+        }
+      });
+      closeLangDropdown();
+    }
+
+    function closeSampleDropdown() {
+      const menu = document.getElementById('sample-dropdown-menu');
+      const arrow = document.getElementById('sample-dropdown-arrow');
+      if (menu) menu.classList.add('hidden');
+      if (arrow) arrow.classList.remove('rotate-180');
+    }
+
+    function filterSampleOptions(query) {
+      const q = (query || '').toLowerCase().trim();
+      const filtered = allSamples.filter(s => s.name.toLowerCase().includes(q));
+      renderSampleOptions(filtered);
+    }
+
+    function selectSample(index) {
+      if (index < 0 || index >= allSamples.length) return;
+      selectedSampleIndex = index;
+      const sample = allSamples[index];
+      
+      const label = document.getElementById('sample-dropdown-label');
+      label.innerHTML = `<span class="text-gray-100 font-medium">${sample.name}</span> <span class="text-xs text-purple-400 font-mono ml-1.5">(${sample.size})</span>`;
+      
+      closeSampleDropdown();
       setSelectedVideo(sample.name, sample.size, sample.path);
+      renderSampleOptions(allSamples);
+    }
+
+    function resetCustomSampleDropdown() {
+      selectedSampleIndex = -1;
+      const label = document.getElementById('sample-dropdown-label');
+      if (label) label.textContent = '-- Chọn 1 video trong kho mẫu --';
+      closeSampleDropdown();
+      renderSampleOptions(allSamples);
     }
 
     function setupDragDrop() {
@@ -720,7 +965,7 @@ HTML_PAGE = """<!DOCTYPE html>
       currentSelectedVideo = null;
       document.getElementById('selected-video-box').classList.add('hidden');
       document.getElementById('run-btn').setAttribute('disabled', 'true');
-      document.getElementById('sample-select').value = '';
+      resetCustomSampleDropdown();
     }
 
     async function startAnalysis() {
@@ -830,6 +1075,79 @@ HTML_PAGE = """<!DOCTYPE html>
       } catch (err) {
         console.error("Lỗi tải lịch sử:", err);
       }
+    }
+
+    function adjustReportHeight() {
+      const frame = document.getElementById('report-frame');
+      if (!frame || frame.classList.contains('hidden')) return;
+      try {
+        const doc = frame.contentDocument || (frame.contentWindow ? frame.contentWindow.document : null);
+        if (!doc || !doc.body) return;
+
+        // Triệt tiêu hoàn toàn scrollbar bên trong iframe
+        doc.documentElement.style.overflow = 'hidden';
+        doc.body.style.overflow = 'hidden';
+
+        // Tính toán chiều cao chính xác của nội dung HTML
+        const contentHeight = Math.max(
+          doc.body.scrollHeight,
+          doc.documentElement.scrollHeight,
+          doc.body.offsetHeight,
+          doc.documentElement.offsetHeight
+        );
+
+        if (contentHeight > 50) {
+          frame.style.height = (contentHeight + 24) + 'px';
+        }
+      } catch (e) {
+        // Ignored
+      }
+    }
+
+    function setupReportIframeAutoResize() {
+      const frame = document.getElementById('report-frame');
+      if (!frame) return;
+
+      frame.addEventListener('load', () => {
+        try {
+          const doc = frame.contentDocument || (frame.contentWindow ? frame.contentWindow.document : null);
+          if (!doc || !doc.body) return;
+
+          // Căn chỉnh chiều cao ngay khi vừa nạp xong
+          adjustReportHeight();
+
+          // Theo dõi các ảnh bên trong tải xong (đặc biệt là storyboard/timeline)
+          doc.querySelectorAll('img').forEach(img => {
+            if (!img.complete) {
+              img.addEventListener('load', adjustReportHeight);
+              img.addEventListener('error', adjustReportHeight);
+            }
+          });
+
+          // Theo dõi khi người dùng click mở/đóng các thẻ <details> trong báo cáo
+          doc.querySelectorAll('details').forEach(d => {
+            d.addEventListener('toggle', () => {
+              adjustReportHeight();
+              setTimeout(adjustReportHeight, 50);
+              setTimeout(adjustReportHeight, 150);
+            });
+          });
+
+          // ResizeObserver để tự động co giãn theo bất kỳ thay đổi nào trong iframe
+          if (frame.contentWindow && frame.contentWindow.ResizeObserver) {
+            const ro = new frame.contentWindow.ResizeObserver(() => {
+              adjustReportHeight();
+            });
+            ro.observe(doc.body);
+          }
+
+          // Kiểm tra lại sau 200ms và 600ms phòng trường hợp font chữ hoặc layout load trễ
+          setTimeout(adjustReportHeight, 200);
+          setTimeout(adjustReportHeight, 600);
+        } catch (err) {
+          console.warn("setupReportIframeAutoResize error:", err);
+        }
+      });
     }
 
     function openReport(url) {
